@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+
+import subprocess
+import re
+from collections import Counter
+
+
+def read_process(args):
+    p = subprocess.Popen(args, stdout=subprocess.PIPE)
+    return [l.decode('latin1').rstrip() for l in p.stdout.readlines()]
+
+
+def main():
+    # detailed qstat output
+    data = read_process(['qstat', '-u', '*', '-r', '-F', 'mem_free,gpu,gpu_ram'])
+   
+    # read & accumulate job list and queue stats
+    jobs = []
+    job = {}
+    queue_stats = {'': {'used': -1, 'total': -1}}
+    for line in data:
+        if re.match('^[a-z]', line): 
+            m = re.match('^([^@]+)@\S+ +\S+ +[0-9]+/([0-9]+)/([0-9]+)', line)
+            if m:  # queue description
+                queue_name, used, total = m.groups()
+                queue_stats[queue_name] = queue_stats.get(queue_name, {'used': 0, 'total': 0})
+                queue_stats[queue_name]['used'] += int(used)
+                queue_stats[queue_name]['total'] += int(total)
+        if re.match('^[0-9]', line):  # start of a new job
+            m = re.match('^([0-9]+) +[0-9.]+ (\S+) +(\S+) +(\S+) +[0-9/]+ +[0-9:]+ +([0-9]+)', line)
+            job_id, job_name, user, status, cpus = m.groups()
+            job = {'id': job_id, 'name': job_name, 'user': user, 'status': status, 'cpus': int(cpus), 'gpus': 0, 'queue': ''}
+            jobs.append(job)  # put the job on the list
+        if line.startswith(' '):  # job properties
+            if 'Master Queue:' in line:
+                job['queue'] = re.search(r' (\S+)@', line).group(1)
+            gpus = re.search(r' gpu=([0-9]+)', line)
+            if gpus:
+                job['gpus'] = int(gpus.group(1))
+
+    # print out jobs/cpus/gpus per user for each queue, incl. waiting
+    queues = sorted(list(set([j.get('queue') for j in jobs])))
+    queues = queues[1:] + [queues[0]]  # put waiting to the end of the listing
+    for queue in queues:
+        # compute per-user stats
+        user_jobs = Counter([j['user'] for j in jobs if j['queue'] == queue])
+        user_cpus = {user: sum([j['cpus'] for j in jobs if j['queue'] == queue and j['user'] == user]) for user in user_jobs}
+        user_gpus = {user: sum([j['gpus'] for j in jobs if j['queue'] == queue and j['user'] == user]) for user in user_jobs}
+
+        # print headers
+        print('\nQueue %-13s (%3d/%3d slots used)\n    user            jobs /  CPUs / GPUs\n----------------------------------------' % 
+              (queue if queue else 'waiting', queue_stats[queue]['used'], queue_stats[queue]['total']))
+        # list users sort by used GPUs, then CPUs
+        for user in sorted(user_cpus.keys(), key=lambda u: user_gpus[u] * 1000 + user_cpus[u], reverse=True):
+            print('    %-12s   %5d / %5d / %5d' % (user, user_jobs[user], user_cpus[user], user_gpus[user]))
+
+
+if __name__ == '__main__':
+    main()
