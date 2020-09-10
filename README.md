@@ -1,7 +1,7 @@
 Qload
 =======
 
-_Checking Son of Grid Engine queue loads_
+_Checking Son of Grid Engine/Sun Grid Engine queue loads via qstat_
 
 Lists the different queues, users and their number of jobs and
 reserved CPUs and GPUs. It parses the output of the `qstat` command
