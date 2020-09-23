@@ -13,13 +13,13 @@ def read_process(args):
 def main():
     # detailed qstat output
     data = read_process(['qstat', '-u', '*', '-r', '-F', 'mem_free,gpu,gpu_ram'])
-   
+
     # read & accumulate job list and queue stats
     jobs = []
     job = {}
     queue_stats = {'': {'used': -1, 'total': -1}}
     for line in data:
-        if re.match('^[a-z]', line): 
+        if re.match('^[a-z]', line):
             m = re.match('^([^@]+)@\S+ +\S+ +[0-9]+/([0-9]+)/([0-9]+)', line)
             if m:  # queue description
                 queue_name, used, total = m.groups()
@@ -40,7 +40,8 @@ def main():
 
     # print out jobs/cpus/gpus per user for each queue, incl. waiting
     queues = sorted(list(set([j.get('queue') for j in jobs])))
-    queues = queues[1:] + [queues[0]]  # put waiting to the end of the listing
+    if not queues[0]:  # put waiting to the end of the listing
+        queues = queues[1:] + [queues[0]]
     for queue in queues:
         # compute per-user stats
         user_jobs = Counter([j['user'] for j in jobs if j['queue'] == queue])
@@ -48,7 +49,7 @@ def main():
         user_gpus = {user: sum([j['gpus'] for j in jobs if j['queue'] == queue and j['user'] == user]) for user in user_jobs}
 
         # print headers
-        print('\nQueue %-13s (%3d/%3d slots used)\n    user            jobs /  CPUs / GPUs\n----------------------------------------' % 
+        print('\nQueue %-13s (%3d/%3d slots used)\n    user            jobs /  CPUs / GPUs\n----------------------------------------' %
               (queue if queue else 'waiting', queue_stats[queue]['used'], queue_stats[queue]['total']))
         # list users sort by used GPUs, then CPUs
         for user in sorted(user_cpus.keys(), key=lambda u: user_gpus[u] * 1000 + user_cpus[u], reverse=True):
