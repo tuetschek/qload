@@ -26,8 +26,8 @@ def main():
                 queue_stats[queue_name] = queue_stats.get(queue_name, {'used': 0, 'total': 0})
                 queue_stats[queue_name]['used'] += int(used)
                 queue_stats[queue_name]['total'] += int(total)
-        if re.match('^[0-9]', line):  # start of a new job
-            m = re.match('^([0-9]+) +[0-9.]+ (\S+) +(\S+) +(\S+) +[0-9/]+ +[0-9:]+ +([0-9]+)', line)
+        if re.match('^\s*[0-9]', line):  # start of a new job
+            m = re.match('^\s*([0-9]+) +[0-9.]+ (\S+) +(\S+) +(\S+) +[0-9/]+ +[0-9:]+ +([0-9]+)', line)
             job_id, job_name, user, status, cpus = m.groups()
             job = {'id': job_id, 'name': job_name, 'user': user, 'status': status, 'cpus': int(cpus), 'gpus': 0, 'queue': ''}
             jobs.append(job)  # put the job on the list
