@@ -31,12 +31,22 @@ def main():
             job_id, job_name, user, status, cpus = m.groups()
             job = {'id': job_id, 'name': job_name, 'user': user, 'status': status, 'cpus': int(cpus), 'gpus': 0, 'queue': ''}
             jobs.append(job)  # put the job on the list
+        if line.startswith('\t'):
+            if 'qc:gpu=' in line:
+                cur_free_gpus = int(re.search(r'qc:gpu=([0-9]+)', line).group(1))
+            if 'qf:gpu_ram=' in line:
+                cur_gpu_ram = int(re.search(r'qf:gpu_ram=([0-9]+)', line).group(1))
+                free_gpus_info = queue_stats[queue_name].get('free_gpus', {})
+                free_gpus_info[cur_gpu_ram] = free_gpus_info.get(cur_gpu_ram, 0) + cur_free_gpus
+                queue_stats[queue_name]['free_gpus'] = free_gpus_info
         if line.startswith(' '):  # job properties
             if 'Master Queue:' in line:
                 job['queue'] = re.search(r' (\S+)@', line).group(1)
             gpus = re.search(r' gpu=([0-9]+)', line)
             if gpus:
                 job['gpus'] = int(gpus.group(1))
+                # count gpus in current queue (assuming queue_name exists!)
+                queue_stats[queue_name]['gpus'] = queue_stats[queue_name].get('gpus', 0) + int(gpus.group(1))
 
     # print out jobs/cpus/gpus per user for each queue, incl. waiting
     queues = sorted(list(set([j.get('queue') for j in jobs])))
@@ -49,9 +59,14 @@ def main():
         user_gpus = {user: sum([j['gpus'] for j in jobs if j['queue'] == queue and j['user'] == user]) for user in user_jobs}
 
         # print headers
-        print('\nQueue %-13s (%3d/%3d slots used)\n    user            jobs /  CPUs / GPUs\n----------------------------------------' %
-              (queue if queue else 'waiting', queue_stats[queue]['used'], queue_stats[queue]['total']))
+        print('\nQueue %-13s (%3d/%3d slots)' % (queue if queue else 'waiting', queue_stats[queue]['used'], queue_stats[queue]['total']))
+        # print free GPU info
+        if 'free_gpus' in queue_stats[queue]:
+            print(('GPUs used: %2d, free ' % queue_stats[queue].get('gpus', 0)) +
+                  ', '.join(["%2dG: %2d" % (mem, num)
+                             for mem, num in sorted(queue_stats[queue]['free_gpus'].items(), reverse=True)]))
         # list users sort by used GPUs, then CPUs
+        print('    user            jobs /  CPUs / GPUs\n----------------------------------------')
         for user in sorted(user_cpus.keys(), key=lambda u: user_gpus[u] * 1000 + user_cpus[u], reverse=True):
             print('    %-12s   %5d / %5d / %5d' % (user, user_jobs[user], user_cpus[user], user_gpus[user]))
 
