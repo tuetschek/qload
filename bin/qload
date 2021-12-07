@@ -45,8 +45,9 @@ def main():
             gpus = re.search(r' gpu=([0-9]+)', line)
             if gpus:
                 job['gpus'] = int(gpus.group(1))
-                # count gpus in current queue (assuming queue_name exists!)
-                queue_stats[queue_name]['gpus'] = queue_stats[queue_name].get('gpus', 0) + int(gpus.group(1))
+                # count used gpus in current queue (assuming queue_name exists!), i.e. only for running jobs
+                if 'r' in job['status']:
+                    queue_stats[queue_name]['gpus'] = queue_stats[queue_name].get('gpus', 0) + int(gpus.group(1))
 
     # print out jobs/cpus/gpus per user for each queue, incl. waiting
     queues = sorted(list(set([j.get('queue') for j in jobs])))
