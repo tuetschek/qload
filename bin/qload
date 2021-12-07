@@ -63,7 +63,8 @@ def main():
         print('\nQueue %-13s (%3d/%3d slots)' % (queue if queue else 'waiting', queue_stats[queue]['used'], queue_stats[queue]['total']))
         # print free GPU info
         if 'free_gpus' in queue_stats[queue]:
-            print(('GPUs used: %2d, free ' % queue_stats[queue].get('gpus', 0)) +
+            print('GPUs total: %2d' % (queue_stats[queue].get('gpus', 0) + sum(queue_stats[queue]['free_gpus'].values())))
+            print(('GPUs used:  %2d, free ' % queue_stats[queue].get('gpus', 0)) +
                   ', '.join(["%2dG: %2d" % (mem, num)
                              for mem, num in sorted(queue_stats[queue]['free_gpus'].items(), reverse=True)]))
         # list users sort by used GPUs, then CPUs
