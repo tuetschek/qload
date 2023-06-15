@@ -9,68 +9,79 @@ def read_process(args):
     p = subprocess.Popen(args, stdout=subprocess.PIPE)
     return [l.decode('latin1').rstrip() for l in p.stdout.readlines()]
 
+def parse_gpus(gp_str):
+    gp_str = gp_str.strip()
+    if gp_str == '(null)' or gp_str == 'N/A':
+        return 0
+    else:
+        return int(gp_str.split(':')[2].split('(')[0])
 
 def main():
-    # detailed qstat output
-    data = read_process(['qstat', '-u', '*', '-r', '-F', 'mem_free,gpu,gpu_ram'])
-
-    # read & accumulate job list and queue stats
-    jobs = []
-    job = {}
-    queue_stats = {'': {'used': -1, 'total': -1}}
+    # overall cluster stats
+    data = read_process(['sinfo', '-N', '--noheader', '-O', 'Available,Partition,NodeList,CPUs,Gres:50,features_act'])
+    partitions = dict()
     for line in data:
-        if re.match('^[a-z]', line):
-            m = re.match('^([^@]+)@\S+ +\S+ +[0-9]+/([0-9]+)/([0-9]+)', line)
-            if m:  # queue description
-                queue_name, used, total = m.groups()
-                queue_stats[queue_name] = queue_stats.get(queue_name, {'used': 0, 'total': 0})
-                queue_stats[queue_name]['used'] += int(used)
-                queue_stats[queue_name]['total'] += int(total)
-        if re.match('^\s*[0-9]', line):  # start of a new job
-            m = re.match('^\s*([0-9]+) +[0-9.]+ (\S+) +(\S+) +(\S+) +[0-9/]+ +[0-9:]+ +([0-9]+)', line)
-            job_id, job_name, user, status, cpus = m.groups()
-            job = {'id': job_id, 'name': job_name, 'user': user, 'status': status, 'cpus': int(cpus), 'gpus': 0, 'queue': ''}
-            jobs.append(job)  # put the job on the list
-        if line.startswith('\t'):
-            if 'qc:gpu=' in line:
-                cur_free_gpus = int(re.search(r'qc:gpu=([0-9]+)', line).group(1))
-            if 'qf:gpu_ram=' in line:
-                cur_gpu_ram = int(re.search(r'qf:gpu_ram=([0-9]+)', line).group(1))
-                free_gpus_info = queue_stats[queue_name].get('free_gpus', {})
-                free_gpus_info[cur_gpu_ram] = free_gpus_info.get(cur_gpu_ram, 0) + cur_free_gpus
-                queue_stats[queue_name]['free_gpus'] = free_gpus_info
-        if line.startswith(' '):  # job properties
-            if 'Master Queue:' in line:
-                job['queue'] = re.search(r' (\S+)@', line).group(1)
-            gpus = re.search(r' gpu=([0-9]+)', line)
-            if gpus:
-                job['gpus'] = int(gpus.group(1))
-                # count used gpus in current queue (assuming queue_name exists!), i.e. only for running jobs
-                if 'r' in job['status']:
-                    queue_stats[queue_name]['gpus'] = queue_stats[queue_name].get('gpus', 0) + int(gpus.group(1))
+        status, partition, node, cpus, gpus, features = line.split()
+        if partition[-1] == '*':
+            partition = partition[:-1]
+        if status =='up':
+            if partition not in partitions:
+                partitions[partition] = {'cpus': 0, 'gpus': 0, 'cpus_used': 0, 'gpus_used': 0, 'jobs': 0}
+                partitions[partition]['users'] = dict()
+                partitions[partition]['nodes'] = dict()
+            partitions[partition]['cpus'] += int(cpus)
+            gpus = parse_gpus(gpus)
+            partitions[partition]['gpus'] += gpus
+            if gpus > 1:
+                if node not in partitions[partition]['nodes']:
+                    partitions[partition]['nodes'][node] = dict()
+                    partitions[partition]['nodes'][node]['type'] = re.search("gpuram([0-9]+G)", features).group(1)
+                    partitions[partition]['nodes'][node]['gpus'] = gpus
+    partitions['waiting'] = {'cpus': 0, 'gpus': 0, 'cpus_used': 0, 'gpus_used': 0, 'jobs': 0}
+    partitions['waiting']['users'] = dict()
 
+    ## print partition info:
+    #for partition in partitions.keys():
+    #    print(partition, partitions[partition]['cpus'], partitions[partition]['gpus'])
+
+    # detailed squeue output
+    data = read_process(['squeue', '--noheader', '-O', 'State:\t,UserName:\t,Partition:\t,NodeList:\t,NumCPUs:\t,tres-per-job:\t,tres-per-node'])
+    # read & accumulate job list stats
+    for line in data:
+        _, user, partition, nodes, cpus, gpus1, gpus2 = line.strip().split('\t')
+        cpus = int(cpus)
+        gpus = parse_gpus(gpus1) + parse_gpus(gpus2)
+        if partition not in partitions or nodes == '':
+            partition = 'waiting'
+        if user not in partitions[partition]['users']:
+            partitions[partition]['users'][user] = {'jobs': 0, 'cpus': 0, 'gpus': 0}
+        partitions[partition]['users'][user]['jobs'] += 1
+        partitions[partition]['jobs'] += 1
+        partitions[partition]['users'][user]['cpus'] += cpus
+        partitions[partition]['cpus_used'] += cpus
+        partitions[partition]['users'][user]['gpus'] += gpus
+        partitions[partition]['gpus_used'] += gpus
+        if partition != 'waiting' and partitions[partition]['gpus'] > 0:
+            partitions[partition]['nodes'][nodes]['gpus'] -= gpus
     # print out jobs/cpus/gpus per user for each queue, incl. waiting
-    queues = sorted(list(set([j.get('queue') for j in jobs])))
-    if not queues[0]:  # put waiting to the end of the listing
-        queues = queues[1:] + [queues[0]]
-    for queue in queues:
+    for name, stats in partitions.items():
         # compute per-user stats
-        user_jobs = Counter([j['user'] for j in jobs if j['queue'] == queue])
-        user_cpus = {user: sum([j['cpus'] for j in jobs if j['queue'] == queue and j['user'] == user]) for user in user_jobs}
-        user_gpus = {user: sum([j['gpus'] for j in jobs if j['queue'] == queue and j['user'] == user]) for user in user_jobs}
 
         # print headers
-        print('\nQueue %-13s (%3d/%3d slots)' % (queue if queue else 'waiting', queue_stats[queue]['used'], queue_stats[queue]['total']))
+        if name == 'waiting':
+            print('\nWaiting        (%3d jobs)' % (stats['jobs']))
+        else:
+            print('\nQueue %-13s (%3d/%3d slots)' % (name, stats['cpus_used'], stats['cpus']))
         # print free GPU info
-        if 'free_gpus' in queue_stats[queue]:
-            print('GPUs total: %2d' % (queue_stats[queue].get('gpus', 0) + sum(queue_stats[queue]['free_gpus'].values())))
-            print(('GPUs used:  %2d, free ' % queue_stats[queue].get('gpus', 0)) +
-                  ', '.join(["%2dG: %2d" % (mem, num)
-                             for mem, num in sorted(queue_stats[queue]['free_gpus'].items(), reverse=True)]))
+        if stats['gpus'] > 0:
+            print('GPUs total: %2d' % stats['gpus'])
+            print('GPUs used:  %2d' % stats['gpus_used'])
+            if stats['gpus'] > stats['gpus_used']:
+                print('GPUs free:', ', '.join(str(c) + " " + t for c, t in sorted([(x['gpus'], x['type']) for x in stats['nodes'].values() if x['gpus'] > 0], reverse=True)))
         # list users sort by used GPUs, then CPUs
         print('    user            jobs /  CPUs / GPUs\n----------------------------------------')
-        for user in sorted(user_cpus.keys(), key=lambda u: user_gpus[u] * 1000 + user_cpus[u], reverse=True):
-            print('    %-12s   %5d / %5d / %5d' % (user, user_jobs[user], user_cpus[user], user_gpus[user]))
+        for user in sorted(stats['users'].keys(), key=lambda u: (stats['users'][u]['gpus'], stats['users'][u]['cpus']), reverse=True):
+            print('    %-12s   %5d / %5d / %5d' % (user, stats['users'][user]['jobs'], stats['users'][user]['cpus'],stats['users'][user]['gpus']))
 
 
 if __name__ == '__main__':
