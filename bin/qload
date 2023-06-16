@@ -69,7 +69,7 @@ def main():
 
         # print headers
         if name == 'waiting':
-            print('\nWaiting        (%3d jobs)' % (stats['jobs']))
+            print('\nWaiting             (%3d jobs)' % (stats['jobs']))
         else:
             print('\nQueue %-13s (%3d/%3d slots)' % (name, stats['cpus_used'], stats['cpus']))
         # print free GPU info
