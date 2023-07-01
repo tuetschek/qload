@@ -16,6 +16,22 @@ def parse_gpus(gp_str):
     else:
         return int(gp_str.split(':')[2].split('(')[0])
 
+def parse_node_list(numnodes, nodes, gpus1, gpus2):
+    numnodes = int(numnodes)
+    if numnodes == 1:
+        gpus = parse_gpus(gpus1) + parse_gpus(gpus2)
+        return gpus, [nodes]
+    assert gpus1 == 'N/A' # I presume that GPUs are allocated per node for multiple nodes, but I don't really know how this works
+    gpus = parse_gpus(gpus2)
+    if nodes == '': # when the job is PENDING
+        return gpus, ['' for _ in range(numnodes)]
+    assert ',' not in nodes # I think there may be format with a comma separated list, but I haven't seen it yet
+    parse = re.search("([^\[]*)\[([0-9]*)-([0-9]*)\]", nodes)
+    nodename = parse.group(1)
+    nodelist = [nodename + str(x) for x in range(int(parse.group(2)), int(parse.group(3)) + 1)]
+    assert len(nodelist) == numnodes
+    return gpus, nodelist
+
 def main():
     # overall cluster stats
     data = read_process(['sinfo', '-N', '--noheader', '-O', 'Available,Partition,NodeList,CPUs,Gres:50,features_act'])
@@ -45,12 +61,11 @@ def main():
     #    print(partition, partitions[partition]['cpus'], partitions[partition]['gpus'])
 
     # detailed squeue output
-    data = read_process(['squeue', '--noheader', '-O', 'State:\t,UserName:\t,Partition:\t,NodeList:\t,NumCPUs:\t,tres-per-job:\t,tres-per-node'])
+    data = read_process(['squeue', '--noheader', '-O', 'State:\t,UserName:\t,Partition:\t,NumNodes:\t,NodeList:\t,NumCPUs:\t,tres-per-job:\t,tres-per-node'])
     # read & accumulate job list stats
     for line in data:
-        _, user, partition, nodes, cpus, gpus1, gpus2 = line.strip().split('\t')
+        _, user, partition, numnodes, nodes, cpus, gpus1, gpus2 = line.strip().split('\t')
         cpus = int(cpus)
-        gpus = parse_gpus(gpus1) + parse_gpus(gpus2)
         if partition not in partitions or nodes == '':
             partition = 'waiting'
         if user not in partitions[partition]['users']:
@@ -59,10 +74,12 @@ def main():
         partitions[partition]['jobs'] += 1
         partitions[partition]['users'][user]['cpus'] += cpus
         partitions[partition]['cpus_used'] += cpus
-        partitions[partition]['users'][user]['gpus'] += gpus
-        partitions[partition]['gpus_used'] += gpus
-        if partition != 'waiting' and partitions[partition]['gpus'] > 0:
-            partitions[partition]['nodes'][nodes]['gpus'] -= gpus
+        gpus, nodes_list = parse_node_list(numnodes, nodes, gpus1, gpus2)
+        for nd in nodes_list:
+            partitions[partition]['users'][user]['gpus'] += gpus
+            partitions[partition]['gpus_used'] += gpus
+            if partition != 'waiting' and partitions[partition]['gpus'] > 0:
+                partitions[partition]['nodes'][nd]['gpus'] -= gpus
     # print out jobs/cpus/gpus per user for each queue, incl. waiting
     for name, stats in partitions.items():
         # compute per-user stats
