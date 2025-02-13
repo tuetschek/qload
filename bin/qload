@@ -34,13 +34,14 @@ def parse_node_list(numnodes, nodes, gpus1, gpus2):
 
 def main():
     # overall cluster stats
-    data = read_process(['sinfo', '-N', '--noheader', '-O', 'Available,Partition,NodeList,CPUs,Gres:50,features_act'])
+    data = read_process(['sinfo', '-N', '--noheader', '-O', 'Available,Partition,NodeList,CPUs,Gres:50,features_act,StateComplete'])
     partitions = dict()
     for line in data:
-        status, partition, node, cpus, gpus, features = line.split()
+        status, partition, node, cpus, gpus, features, state_flags = line.split()
         if partition[-1] == '*':
             partition = partition[:-1]
-        if status =='up':
+        # only use useable nodes (even drained nodes may have status 'up')
+        if status =='up' and not ('drain' in state_flags or 'down' in state_flags):
             if partition not in partitions:
                 partitions[partition] = {'cpus': 0, 'gpus': 0, 'cpus_used': 0, 'gpus_used': 0, 'jobs': 0}
                 partitions[partition]['users'] = dict()
@@ -94,7 +95,12 @@ def main():
             print('GPUs total: %2d' % stats['gpus'])
             print('GPUs used:  %2d' % stats['gpus_used'])
             if stats['gpus'] > stats['gpus_used']:
-                print('GPUs free:', ', '.join(str(c) + " " + t for c, t in sorted([(x['gpus'], x['type']) for x in stats['nodes'].values() if x['gpus'] > 0], reverse=True)))
+                # sort by total GPURAM available on each node, print number & size of GPUs + node name in brackets
+                print('GPUs free:', ', '.join(f"{count} {gputype} ({node})"
+                                              for node, count, gputype
+                                              in sorted([(n, x['gpus'], x['type']) for n, x in stats['nodes'].items() if x['gpus'] > 0],
+                                                        key=lambda x: int(x[2][:-1])*x[1], reverse=True)))
+
         # list users sort by used GPUs, then CPUs
         print('    user            jobs /  CPUs / GPUs\n----------------------------------------')
         for user in sorted(stats['users'].keys(), key=lambda u: (stats['users'][u]['gpus'], stats['users'][u]['cpus']), reverse=True):
