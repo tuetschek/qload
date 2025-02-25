@@ -80,6 +80,8 @@ def main():
             partitions[partition]['users'][user]['gpus'] += gpus
             partitions[partition]['gpus_used'] += gpus
             if partition != 'waiting' and partitions[partition]['gpus'] > 0:
+                if nd not in partitions[partition]['nodes']:
+                    continue  # skipping nodes that are draining or not up or something (were not added to cluster stats)
                 partitions[partition]['nodes'][nd]['gpus'] -= gpus
     # print out jobs/cpus/gpus per user for each queue, incl. waiting
     for name, stats in partitions.items():
