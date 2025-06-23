@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# qload - a simple command line tool to show the current load of a SLURM
+# cluster, including the number of jobs, CPUs and GPUs per user.
 
 import subprocess
 import re
@@ -14,7 +17,16 @@ def parse_gpus(gp_str):
     if gp_str == '(null)' or gp_str == 'N/A':
         return 0
     else:
-        return int(gp_str.split(':')[2].split('(')[0])
+        # Handle format like "gres:gpu:nvidia_a100:1" or older formats
+        parts = gp_str.split(':')
+        if len(parts) >= 4 and parts[0] == 'gres' and parts[1] == 'gpu':
+            # New format: gres:gpu:gpu_type:count
+            return int(parts[3].split('(')[0])
+        elif len(parts) >= 3:
+            # Older format: assume count is at index 2
+            return int(parts[2].split('(')[0])
+        else:
+            return 0
 
 def parse_node_list(numnodes, nodes, gpus1, gpus2):
     numnodes = int(numnodes)
@@ -65,24 +77,42 @@ def main():
     data = read_process(['squeue', '--noheader', '-O', 'State:\t,UserName:\t,Partition:\t,NumNodes:\t,NodeList:\t,NumCPUs:\t,tres-per-job:\t,tres-per-node'])
     # read & accumulate job list stats
     for line in data:
-        _, user, partition, numnodes, nodes, cpus, gpus1, gpus2 = line.strip().split('\t')
-        cpus = int(cpus)
-        if partition not in partitions or nodes == '':
-            partition = 'waiting'
-        if user not in partitions[partition]['users']:
-            partitions[partition]['users'][user] = {'jobs': 0, 'cpus': 0, 'gpus': 0}
-        partitions[partition]['users'][user]['jobs'] += 1
-        partitions[partition]['jobs'] += 1
-        partitions[partition]['users'][user]['cpus'] += cpus
-        partitions[partition]['cpus_used'] += cpus
-        gpus, nodes_list = parse_node_list(numnodes, nodes, gpus1, gpus2)
-        for nd in nodes_list:
-            partitions[partition]['users'][user]['gpus'] += gpus
-            partitions[partition]['gpus_used'] += gpus
-            if partition != 'waiting' and partitions[partition]['gpus'] > 0:
-                if nd not in partitions[partition]['nodes']:
-                    continue  # skipping nodes that are draining or not up or something (were not added to cluster stats)
-                partitions[partition]['nodes'][nd]['gpus'] -= gpus
+        try:
+            fields = line.strip().split('\t')
+            if len(fields) == 8:
+                _, user, partition, numnodes, nodes, cpus, gpus1, gpus2 = fields
+            elif len(fields) == 7:
+                # Handle case where tres-per-node might be missing
+                _, user, partition, numnodes, nodes, cpus, gpus1 = fields
+                gpus2 = 'N/A'
+            else:
+                raise ValueError(f"Unexpected number of fields: {len(fields)}")
+            
+            cpus = int(cpus)
+            if partition not in partitions or nodes == '':
+                partition = 'waiting'
+            if user not in partitions[partition]['users']:
+                partitions[partition]['users'][user] = {'jobs': 0, 'cpus': 0, 'gpus': 0}
+            partitions[partition]['users'][user]['jobs'] += 1
+            partitions[partition]['jobs'] += 1
+            partitions[partition]['users'][user]['cpus'] += cpus
+            partitions[partition]['cpus_used'] += cpus
+            gpus, nodes_list = parse_node_list(numnodes, nodes, gpus1, gpus2)
+            for nd in nodes_list:
+                partitions[partition]['users'][user]['gpus'] += gpus
+                partitions[partition]['gpus_used'] += gpus
+                if partition != 'waiting' and partitions[partition]['gpus'] > 0:
+                    if nd not in partitions[partition]['nodes']:
+                        continue  # skipping nodes that are draining or not up or something (were not added to cluster stats)
+                    partitions[partition]['nodes'][nd]['gpus'] -= gpus
+        except Exception as e:
+            print("Failed parsing job:")
+            print(line)
+            print(f"Error: {e}")
+            fields = line.strip().split('\t')
+            print(f"Number of fields: {len(fields)}")
+            print("Fields:", fields)
+
     # print out jobs/cpus/gpus per user for each queue, incl. waiting
     for name, stats in partitions.items():
         # compute per-user stats
