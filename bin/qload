@@ -46,7 +46,7 @@ def parse_node_list(numnodes, nodes, gpus1, gpus2):
 
 def main():
     # overall cluster stats
-    data = read_process(['sinfo', '-N', '--noheader', '-O', 'Available,Partition,NodeList,CPUs,Gres:50,features_act,StateComplete'])
+    data = read_process(['sinfo', '-N', '--noheader', '-O', 'Available,Partition,NodeList,CPUs,Gres:80,features_act:50,StateComplete'])
     partitions = dict()
     for line in data:
         status, partition, node, cpus, gpus, features, state_flags = line.split()
